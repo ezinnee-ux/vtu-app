@@ -1,0 +1,214 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String         @id @default(uuid())
+  name           String
+  email          String         @unique
+  phone          String         @unique
+  passwordHash   String
+  role           String         @default("USER") // USER or ADMIN
+  status         String         @default("ACTIVE") // ACTIVE or SUSPENDED
+  emailVerified  Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  wallet         Wallet?
+  orders         Order[]
+  payments       Payment[]
+  savedNumbers   SavedNumber[]
+  notifications  Notification[]
+  supportTickets SupportTicket[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model Wallet {
+  id             String              @id @default(uuid())
+  userId         String              @unique
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance        Float               @default(0.0)
+  currency       String              @default("NGN")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  transactions   WalletTransaction[]
+
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id            String       @id @default(uuid())
+  walletId      String
+  wallet        Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amount        Float
+  type          String       // CREDIT or DEBIT
+  description   String
+  reference     String       @unique
+  status        String       @default("SUCCESS") // SUCCESS, FAILED, PENDING
+  balanceBefore Float
+  balanceAfter  Float
+  createdAt     DateTime     @default(now())
+
+  @@index([walletId])
+  @@index([reference])
+}
+
+model Network {
+  id                     String      @id @default(uuid())
+  name                   String      @unique // MTN, Airtel, Glo, 9mobile
+  code                   String      @unique // mtn, airtel, glo, 9mobile
+  logo                   String
+  airtimeDiscountPercent Float       @default(2.0) // e.g. 2% discount
+  isActive               Boolean     @default(true)
+  createdAt              DateTime    @default(now())
+
+  dataPlans              DataPlan[]
+  orders                 Order[]
+  savedNumbers           SavedNumber[]
+}
+
+model DataPlan {
+  id           String   @id @default(uuid())
+  networkId    String
+  network      Network  @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  planCode     String   @unique
+  name         String   // e.g. "1.5GB Monthly"
+  category     String   // DAILY, 2_DAY, 3_DAY, WEEKLY, BIWEEKLY, MONTHLY, 2_MONTH, 3_MONTH
+  dataSize     String   // "1.5GB", "500MB"
+  validity     String   // "30 Days", "1 Day"
+  providerCost Float    // wholesale cost from VTU provider
+  adminMargin  Float    @default(50.0) // admin profit margin in Naira
+  sellingPrice Float    // providerCost + adminMargin
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders       Order[]
+
+  @@index([networkId])
+  @@index([category])
+}
+
+model Order {
+  id            String             @id @default(uuid())
+  reference     String             @unique // VTU-YYYYMMDD-XXXXXXXX
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          String             // DATA or AIRTIME
+  networkId     String
+  network       Network            @relation(fields: [networkId], references: [id])
+  planId        String?
+  plan          DataPlan?          @relation(fields: [planId], references: [id])
+  phoneNumber   String
+  amount        Float
+  costPrice     Float              @default(0.0)
+  profit        Float              @default(0.0)
+  status        String             @default("PENDING") // PENDING, PROCESSING, SUCCESSFUL, FAILED, REVERSED
+  paymentMethod String             @default("WALLET") // WALLET, GATEWAY
+  idempotencyKey String?           @unique
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  transaction   Transaction?
+
+  @@index([userId])
+  @@index([reference])
+  @@index([status])
+  @@index([phoneNumber])
+}
+
+model Transaction {
+  id                String   @id @default(uuid())
+  orderId           String   @unique
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reference         String   @unique
+  providerReference String?
+  externalReference String?
+  apiResponse       String?  // Raw JSON response from provider
+  status            String   @default("PENDING")
+  errorMessage      String?
+  retryCount        Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([reference])
+  @@index([status])
+}
+
+model Payment {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reference       String   @unique
+  gateway         String   // PAYSTACK, FLUTTERWAVE, TEST
+  amount          Float
+  status          String   @default("PENDING") // PENDING, SUCCESS, FAILED
+  gatewayResponse String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([reference])
+}
+
+model APITransaction {
+  id             String   @id @default(uuid())
+  provider       String
+  endpoint       String
+  requestPayload String?
+  responsePayload String?
+  statusCode     Int
+  durationMs     Int
+  createdAt      DateTime @default(now())
+
+  @@index([provider])
+}
+
+model SavedNumber {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  networkId   String
+  network     Network  @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  phoneNumber String
+  name        String   // Nickname e.g. "Mum's Phone", "Office Line"
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO") // SUCCESS, INFO, WARNING, ERROR
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model SupportTicket {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject       String
+  message       String
+  status        String   @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  priority      String   @default("MEDIUM") // LOW, MEDIUM, HIGH
+  adminResponse String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
